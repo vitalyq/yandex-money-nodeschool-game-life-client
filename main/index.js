@@ -1,8 +1,5 @@
 'use strict';
 
-//
-// YOUR CODE GOES HERE...
-//
 const nyan = `
 ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 ░░░░░░░░░░▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄░░░░░░░░░░░
@@ -19,87 +16,102 @@ const nyan = `
 ░░░░░░████▀░░███▀░░░░░░▀███░░▀██▀░░░░░░░
 ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 `;
-//
-// Nyan cat lies here...
-//
 const URL = 'ws://localhost:3000/';
 const ADD_INTERVAL = 1000;
+let socket;
+let lifeGame;
+let token;
+let color;
+let lastTimeout;
+const points = [];
 
-App.onToken = (token) => {
-  if (token.length === 0) { return; }
-  const socket = new WebSocket(`${URL}?token=${token}`);
-  const points = [];
-  let lifeGame;
-  let lastTimeout;
-  let color;
+// Batch points and send in bulk
+const onSend = (state) => {
+  points.push(...state.affectedPoints);
 
-  const handleSend = (data) => {
-    // Batch some points and send in bulk
-    points.push(...data.affectedPoints);
+  const timeout = window.setTimeout(() => {
+    if (timeout !== lastTimeout) { return; }
+    state.affectedPoints = points.concat();
+    points.length = 0;
+    socket.send(JSON.stringify({
+      type: 'ADD_POINT',
+      data: state,
+    }));
+  }, ADD_INTERVAL);
 
-    const timeout = window.setTimeout(() => {
-      if (timeout !== lastTimeout) { return; }
-      data.affectedPoints = points.concat();
-      points.length = 0;
-      socket.send(JSON.stringify({
-        type: 'ADD_POINT',
-        data,
-      }));
-    }, ADD_INTERVAL);
-    lastTimeout = timeout;
-  };
+  lastTimeout = timeout;
+};
 
-  const handleMessage = (event) => {
-    const { type, data } = JSON.parse(event.data);
+const initialize = (data) => {
+  lifeGame = new LifeGame(data.user, data.settings);
+  lifeGame.init();
+  lifeGame.setState(data.state);
+  lifeGame.send = onSend;
+  color = data.user.color;
+};
 
-    if (type === 'INITIALIZE') {
-      color = data.user.color;
-      lifeGame = new LifeGame(data.user, data.settings);
-      lifeGame.init();
-      lifeGame.setState(data.state);
-      lifeGame.send = handleSend;
-    } else if (type === 'UPDATE_STATE') {
-      // Apply batched points
-      points.forEach((p) => {
-        data[p.x][p.y] = { user: { color, token }};
-      });
-      lifeGame.setState(data);
-    }
-  };
+const updateState = (data) => {
+  // Add batched points
+  points.forEach((p) => {
+    data[p.x][p.y] = { user: { token, color } };
+  });
+  lifeGame.setState(data);
+};
 
-  // Set up listeners
-  socket.addEventListener('message', handleMessage);
+const onMessage = (event) => {
+  const { type, data } = JSON.parse(event.data);
+  switch (type) {
+    case 'INITIALIZE':
+      initialize(data);
+      break;
+    case 'UPDATE_STATE':
+      updateState(data);
+      break;
+    default:
+      console.error(`Messages of type ${type} are not supported`);
+  }
+};
+
+App.onToken = (newToken) => {
+  if (!newToken) { return; }
+  token = newToken;
+  socket = new WebSocket(`${URL}?token=${token}`);
+
+  socket.addEventListener('message', onMessage);
   socket.addEventListener('open', () => console.log('Connected'));
   socket.addEventListener('close', () => console.log('Disconnected'));
   socket.addEventListener('error', console.error);
-
-  // And now let's do something weird
-  document.addEventListener('keydown', function (event) {
-    if (event.keyCode !== 13 || socket.readyState !== 1) { return; }
-    const points = [];
-    const lines = nyan.split('\n');
-    lines.forEach((line, y) => {
-      [...line].forEach((char, x) => {
-        switch (char) {
-          case '█':
-            points.push({ x, y: y * 2 });
-            points.push({ x, y: y * 2 + 1 });
-            break;
-          case '▀':
-            points.push({ x, y: y * 2 });
-            break;
-          case '▄':
-            points.push({ x, y: y * 2 + 1 });
-            break;
-        };
-      });
-    });
-    socket.send(JSON.stringify({
-      type: 'ADD_POINT',
-      data: {
-        affectedPoints: points,
-        user: { color, token },
-      },
-    }));
-  });
 };
+
+// Send Nyan Cat
+document.addEventListener('keydown', (event) => {
+  if (event.keyCode !== 13 || !socket || socket.readyState !== 1) { return; }
+  const dots = [];
+
+  const lines = nyan.split('\n');
+  lines.forEach((line, y) => {
+    [...line].forEach((char, x) => {
+      switch (char) {
+        case '█':
+          dots.push({ x, y: y * 2 });
+          dots.push({ x, y: (y * 2) + 1 });
+          break;
+        case '▀':
+          dots.push({ x, y: y * 2 });
+          break;
+        case '▄':
+          dots.push({ x, y: (y * 2) + 1 });
+          break;
+        default:
+      }
+    });
+  });
+
+  socket.send(JSON.stringify({
+    type: 'ADD_POINT',
+    data: {
+      affectedPoints: dots,
+      user: { token, color },
+    },
+  }));
+});
